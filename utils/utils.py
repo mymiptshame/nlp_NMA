@@ -43,7 +43,9 @@ def get_embedding_weights(X, path, emb_size):
     return weights_matrix, word2idx
 
 
-def sentences_to_idx(X, word2idx, max_len):
+def sentences_to_idx(X, word2idx, max_len, shuffle):
+    if shuffle:
+        X = shuffle_sentences(X)
     sentence_tokens = [nltk.word_tokenize(sentence) for sentence in X]
     for i, sentence_token in enumerate(sentence_tokens):
         tokens_to_add = max(0, max_len - len(sentence_token))
@@ -64,11 +66,11 @@ def get_dataloaders(X, y, test_size=0.2, batch_size=32):
     return train_dataloader, val_dataloader
 
 
-def preprocess_data(X, y, path, emb_size, max_len):
+def preprocess_data(X, y, path, emb_size, max_len, shuffle=False):
     embedding_weights, word2idx = get_embedding_weights(X, path, emb_size)
     label_encoder = LabelEncoder().fit(y)
 
-    X = sentences_to_idx(X, word2idx, max_len)
+    X = sentences_to_idx(X, word2idx, max_len, shuffle)
     y = label_encoder.transform(y)
 
     return X, y, word2idx, embedding_weights
@@ -105,11 +107,31 @@ def save_embeddings(embeddings, path):
     print('Saved!')
 
 
-def get_bert_dataloaders(X, y, test_size=0.2, batch_size=16):
+def shuffle_sentence(sentence):
+    n = len(sentence)
+    while True:
+        permutation = np.random.permutation(n)
+        if (permutation != np.arange(n)).all() == 0:
+            return np.array(sentence)[permutation]
+        
+        
+def shuffle_sentences(sentences):
+    shuffled_sentences = []
+    for sentence in tqdm(sentences):
+        tokens = sentence.split(' ')
+        shuffled_sentences.append(' '.join(shuffle_sentence(tokens)))
+        
+    return shuffled_sentences
+
+        
+def get_bert_dataloaders(X, y, test_size=0.2, batch_size=16, shuffle=False):
     label_encoder = LabelEncoder().fit(y)
 
     X, y = X.values, label_encoder.transform(y)
     X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=test_size, shuffle=True, random_state=42, stratify=y)
+    if shuffle:
+        sentences = [sentence for sentence in X_val]
+        shuffled_sentences = shuffle_sentences(sentences)
 
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
     tokenized_train_text = tokenizer(list(X_train), truncation=True, padding=True)
@@ -120,8 +142,15 @@ def get_bert_dataloaders(X, y, test_size=0.2, batch_size=16):
 
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size)
+                                  
+    if shuffle:
+        tokenized_val_text_shuffled = tokenizer(list(shuffled_sentences), truncation=True, padding=True)
+        val_dataloader_shuffled = DataLoader(BertDataset(tokenized_val_text_shuffled, y_val), batch_size=batch_size)
 
-    return train_dataloader, val_dataloader
+    if not shuffle:
+        return train_dataloader, val_dataloader
+    else:
+        return train_dataloader, val_dataloader, val_dataloader_shuffled
 
 
 def get_bert_embeddings(X, path):
